@@ -1,0 +1,20 @@
+{
+  "name": "campaign-management-system",
+  "version": "4.0.0",
+  "description": "Campaign Management System v4 - RDP Complete System with sub-admins, invite links, analytics, PDF reports, and enhanced security",
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel --prod"
+  },
+  "dependencies": {
+    "pg": "^8.13.0",
+    "puppeteer-core": "^21.6.0",
+    "@sparticuz/chromium": "^119.0.0"
+  },
+  "devDependencies": {
+    "vercel": "^33.0.0"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
