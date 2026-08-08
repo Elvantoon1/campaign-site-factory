@@ -50,11 +50,29 @@ const server = http.createServer(async (req, res) => {
 // Render sets PORT automatically for Web Services — must bind to it (and to
 // 0.0.0.0, not localhost, so Render's proxy can reach the process).
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`Campaign Site Factory listening on port ${PORT}`);
-  if (!process.env.DATABASE_URL) {
-    console.warn('WARNING: DATABASE_URL is not set — API requests will fail until it is.');
+async function runMigrations() {
+  if (!process.env.DATABASE_URL) return;
+  try {
+    const { Pool } = require('pg');
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+    const client = await pool.connect();
+    const sql = fs.readFileSync(path.join(__dirname, 'migrations', '001_factory_schema.sql'), 'utf8');
+    await client.query(sql);
+    console.log('[server] Factory migrations completed successfully');
+    client.release();
+    await pool.end();
+  } catch (err) {
+    console.error('[server] Migration warning:', err.message);
   }
+}
+
+runMigrations().then(() => {
+  server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Campaign Site Factory listening on port ${PORT}`);
+    if (!process.env.DATABASE_URL) {
+      console.warn('WARNING: DATABASE_URL is not set — API requests will fail until it is.');
+    }
+  });
 });
 
 module.exports = server;
