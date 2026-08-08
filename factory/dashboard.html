@@ -124,7 +124,7 @@
 
         <div class="panel rounded-2xl p-8 shadow-2xl shadow-black/40">
           <h1 class="text-lg font-bold mb-1">لوحة تحكم المصنع</h1>
-          <p class="text-sm text-lo mb-6">وصول مخصّص لفريقنا فقط — يتطلب مصادقة ثنائية</p>
+          <p class="text-sm text-lo mb-6">وصول مخصّص لفريقنا فقط</p>
 
           <template x-if="errorMsg"><div class="mb-4 p-3 rounded-xl bg-alert/10 border border-alert/30 text-[#F08999] text-sm"><span x-text="errorMsg"></span></div></template>
 
@@ -136,29 +136,6 @@
                 <span x-show="!loading">تسجيل الدخول</span><span x-show="loading">جارٍ التحقق…</span>
               </button>
             </form>
-          </template>
-
-          <template x-if="screen === 'totp-verify'">
-            <form @submit.prevent="submitTotpVerify()" class="space-y-4">
-              <p class="text-xs text-lo mono">التحقق بخطوتين</p>
-              <input x-model="totpCode" inputmode="numeric" maxlength="6" placeholder="000000" required autofocus class="mono w-full px-4 py-3 rounded-xl panel-soft border-0 text-center text-2xl tracking-[0.5em]">
-              <button type="submit" :disabled="loading" class="btn-primary w-full py-3 rounded-xl text-sm">تأكيد الدخول</button>
-            </form>
-          </template>
-
-          <template x-if="screen === 'totp-enroll'">
-            <div class="space-y-4">
-              <p class="text-xs text-lo mono">تفعيل التحقق بخطوتين مطلوب</p>
-              <p class="text-sm text-lo">امسح الرمز ضوئيًا عبر تطبيق مصادقة (Google Authenticator / Authy)، ثم أدخل الرمز الحالي لتفعيل الحساب.</p>
-              <div class="bg-white p-3 rounded-xl flex items-center justify-center w-fit mx-auto">
-                <img :src="'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=' + encodeURIComponent(otpauthUrl)" class="w-36 h-36" alt="QR">
-              </div>
-              <p class="text-[11px] text-lo mono break-all text-center" x-text="totpSecret"></p>
-              <form @submit.prevent="submitTotpEnrollConfirm()" class="space-y-3">
-                <input x-model="totpCode" inputmode="numeric" maxlength="6" placeholder="000000" required class="mono w-full px-4 py-3 rounded-xl panel-soft border-0 text-center text-2xl tracking-[0.5em]">
-                <button type="submit" :disabled="loading" class="btn-primary w-full py-3 rounded-xl text-sm">تفعيل والدخول</button>
-              </form>
-            </div>
           </template>
         </div>
       </div>
@@ -542,10 +519,6 @@ function factoryApp() {
     loading: false,
     errorMsg: '',
     loginForm: { username: '', password: '' },
-    preToken: null,
-    totpCode: '',
-    totpSecret: '',
-    otpauthUrl: '',
     token: null,
     superAdminName: '',
     activeTab: 'tenants',
@@ -630,23 +603,8 @@ function factoryApp() {
       try {
         const data = await this.api('/auth/login', { method: 'POST', body: JSON.stringify(this.loginForm) });
         if (data.token) { this.finishLogin(data); return; }
-        this.preToken = data.preToken;
-        this.screen = data.totpEnrolled ? 'totp-verify' : 'totp-enroll';
-        if (!data.totpEnrolled) await this.startTotpEnroll();
       } catch (e) { this.errorMsg = e.message; } finally { this.loading = false; }
     },
-    async startTotpEnroll() {
-      const data = await this.api('/auth/totp/enroll', { method: 'POST', body: JSON.stringify({ preToken: this.preToken }) });
-      this.totpSecret = data.secret; this.otpauthUrl = data.otpauthUrl;
-    },
-    async submitTotpEnrollConfirm() {
-      this.loading = true; this.errorMsg = '';
-      try {
-        const data = await this.api('/auth/totp/enroll/confirm', { method: 'POST', body: JSON.stringify({ preToken: this.preToken, code: this.totpCode }) });
-        this.finishLogin(data);
-      } catch (e) { this.errorMsg = e.message; } finally { this.loading = false; }
-    },
-    async submitTotpVerify() {
       this.loading = true; this.errorMsg = '';
       try {
         const data = await this.api('/auth/totp/verify', { method: 'POST', body: JSON.stringify({ preToken: this.preToken, code: this.totpCode }) });

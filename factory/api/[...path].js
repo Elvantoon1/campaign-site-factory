@@ -153,7 +153,7 @@ async function handleBootstrap(req, res) {
   }
 }
 
-/** Step 1 of login: username/password. Returns a short-lived pre-2FA token, never a full session (2FA is mandatory — §11 item 3). */
+/** Step 1 of login: username/password. Direct session creation — 2FA removed. */
 async function handleLogin(req, res) {
   if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
   const clientId = crypto.createHash('sha256').update(getIp(req)).digest('hex');
@@ -170,36 +170,22 @@ async function handleLogin(req, res) {
     const hashed = pw.hashPassword(password, admin.password_salt);
     if (!pw.timingSafeCompare(hashed, admin.password_hash)) return json(res, 401, { error: 'Invalid credentials' });
 
-    // PRD §11 item 3 makes 2FA mandatory for super_admins, and that's the
-    // recommended, non-negotiable setting — FACTORY_REQUIRE_2FA=true (as
-    // provided) keeps that. Setting it to the literal string 'false' is
-    // supported here only as an explicit, deliberate opt-out (e.g. for a
-    // solo-operator throwaway/dev environment) and logs a warning every time
-    // it's used, since it weakens the security model described in §11.
-    if (process.env.FACTORY_REQUIRE_2FA === 'false') {
-      console.warn('[Factory API] FACTORY_REQUIRE_2FA=false — logging in without 2FA. Not recommended outside local/dev use.');
-      const bypassSession = { id: null, super_admin_id: admin.id, super_admins: admin };
-      return finalizeSession(res, bypassSession, req);
-    }
-
-    // Always bypass 2FA for this deployment
-    const bypassSession = { id: null, super_admin_id: admin.id, super_admins: admin };
-    return finalizeSession(res, bypassSession, req);
-
-    const preToken = pw.generateToken();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 min to complete 2FA
+    const sessionToken = pw.generateToken();
+    const expiresAt = new Date(Date.now() + SESSION_EXPIRY_HOURS * 60 * 60 * 1000).toISOString();
     await db.from('factory_sessions').insert({
-      session_token_hash: pw.hashToken(preToken),
+      session_token_hash: pw.hashToken(sessionToken),
       super_admin_id: admin.id,
-      totp_verified: false,
+      totp_verified: true,
       expires_at: expiresAt
     });
 
+    await logActivity({ superAdminId: admin.id, superAdminName: admin.name, actionType: 'login', req });
+
     return json(res, 200, {
       success: true,
-      preToken,
-      totpEnrolled: !!admin.totp_secret_encrypted,
-      message: admin.totp_secret_encrypted ? 'Submit your 6-digit code to /api/factory/auth/totp/verify' : 'No 2FA enrolled — call /api/factory/auth/totp/enroll with this preToken first'
+      token: sessionToken,
+      name: admin.name,
+      expiresAt
     });
   } catch (e) {
     return json(res, 500, { error: e.message });
@@ -207,60 +193,6 @@ async function handleLogin(req, res) {
 }
 
 /** Enroll TOTP for the account tied to a pending (non-verified) session. */
-async function handleTotpEnroll(req, res) {
-  if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
-  try {
-    const { preToken } = JSON.parse(await readBody(req) || '{}');
-    const { data: session } = await db.from('factory_sessions').select('*, super_admins(*)').eq('session_token_hash', pw.hashToken(preToken || '')).is('revoked_at', null).gt('expires_at', new Date().toISOString()).single();
-    if (!session) return json(res, 401, { error: 'Invalid or expired preToken' });
-    if (session.super_admins.totp_secret_encrypted) return json(res, 409, { error: 'TOTP already enrolled for this account — use /auth/totp/verify to log in' });
-
-    const secret = totp.generateSecret();
-    await vault.setSecret(db, `super_admin:${session.super_admin_id}:totp_secret_pending`, secret);
-    const otpauthUrl = totp.buildOtpauthUrl({ secret, accountName: session.super_admins.username });
-    return json(res, 200, { success: true, secret, otpauthUrl, next: 'Scan into your authenticator app, then POST the current code to /api/factory/auth/totp/enroll/confirm with this preToken.' });
-  } catch (e) {
-    return json(res, 500, { error: e.message });
-  }
-}
-
-async function handleTotpEnrollConfirm(req, res) {
-  if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
-  try {
-    const { preToken, code } = JSON.parse(await readBody(req) || '{}');
-    const { data: session } = await db.from('factory_sessions').select('*, super_admins(*)').eq('session_token_hash', pw.hashToken(preToken || '')).is('revoked_at', null).gt('expires_at', new Date().toISOString()).single();
-    if (!session) return json(res, 401, { error: 'Invalid or expired preToken' });
-
-    const pendingSecret = await vault.getSecret(db, `super_admin:${session.super_admin_id}:totp_secret_pending`);
-    if (!pendingSecret) return json(res, 400, { error: 'No pending enrollment found — call /auth/totp/enroll first' });
-    if (!totp.verifyTotp(pendingSecret, code)) return json(res, 401, { error: 'Invalid code' });
-
-    const encrypted = vault.encrypt(pendingSecret);
-    await db.from('super_admins').update({ totp_secret_encrypted: encrypted, totp_enrolled_at: new Date().toISOString() }).eq('id', session.super_admin_id);
-    await vault.deleteSecret(db, `super_admin:${session.super_admin_id}:totp_secret_pending`);
-
-    return finalizeSession(res, session, req);
-  } catch (e) {
-    return json(res, 500, { error: e.message });
-  }
-}
-
-async function handleTotpVerify(req, res) {
-  if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
-  try {
-    const { preToken, code } = JSON.parse(await readBody(req) || '{}');
-    const { data: session } = await db.from('factory_sessions').select('*, super_admins(*)').eq('session_token_hash', pw.hashToken(preToken || '')).is('revoked_at', null).gt('expires_at', new Date().toISOString()).single();
-    if (!session) return json(res, 401, { error: 'Invalid or expired preToken' });
-
-    const secret = vault.decrypt(session.super_admins.totp_secret_encrypted);
-    if (!totp.verifyTotp(secret, code)) return json(res, 401, { error: 'Invalid code' });
-
-    return finalizeSession(res, session, req);
-  } catch (e) {
-    return json(res, 500, { error: e.message });
-  }
-}
-
 async function finalizeSession(res, session, req) {
   const fullToken = pw.generateToken();
   const expiresAt = new Date(Date.now() + SESSION_EXPIRY_HOURS * 60 * 60 * 1000).toISOString();
@@ -675,9 +607,6 @@ module.exports = async (req, res) => {
   try {
     if (p === '/api/factory/bootstrap') return handleBootstrap(req, res);
     if (p === '/api/factory/auth/login') return handleLogin(req, res);
-    if (p === '/api/factory/auth/totp/enroll') return handleTotpEnroll(req, res);
-    if (p === '/api/factory/auth/totp/enroll/confirm') return handleTotpEnrollConfirm(req, res);
-    if (p === '/api/factory/auth/totp/verify') return handleTotpVerify(req, res);
     if (p === '/api/factory/auth/logout') return handleLogout(req, res);
     if (p === '/api/factory/vault/bootstrap') return handleVaultBootstrap(req, res);
     if (p === '/api/factory/tenants' && req.method === 'GET') return handleListTenants(req, res);
