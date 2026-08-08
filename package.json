@@ -4,5 +4,8 @@
   "description": "نظام لإنشاء وإدارة مواقع حملات إعلامية متعددة",
   "scripts": {
     "test": "echo \"Tests passed\" && exit 0"
+  },
+  "dependencies": {
+    "pg": "^8.22.0"
   }
 }

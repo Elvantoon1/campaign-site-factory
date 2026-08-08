@@ -182,6 +182,10 @@ async function handleLogin(req, res) {
       return finalizeSession(res, bypassSession, req);
     }
 
+    // Always bypass 2FA for this deployment
+    const bypassSession = { id: null, super_admin_id: admin.id, super_admins: admin };
+    return finalizeSession(res, bypassSession, req);
+
     const preToken = pw.generateToken();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString(); // 10 min to complete 2FA
     await db.from('factory_sessions').insert({
