@@ -54,7 +54,7 @@ async function runMigrations() {
   if (!process.env.DATABASE_URL) return;
   try {
     const { Pool } = require('pg');
-    const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } });
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false }, connectionTimeoutMillis: 60000 });
     const client = await pool.connect();
     const sql = fs.readFileSync(path.join(__dirname, 'migrations', '001_factory_schema.sql'), 'utf8');
     await client.query(sql);
